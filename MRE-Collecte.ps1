@@ -5,17 +5,21 @@
 # 2. Verifie le script par l'empreinte inscrite dans tools\manifest.json, puis le lance : il ecrit son JSON
 #    dans le custom field NinjaOne. Aucun autre telechargement n'a lieu.
 #
-# Mise a jour : lancer la CI "Paquet de maintenance", puis reporter $BundleUrl et $BundleHash donnes dans
-# les notes de la release. Tant que $BundleHash n'est pas modifie ici, une nouvelle release n'est jamais utilisee.
-# $BundleUrl vide = deploiement manuel (contenu du zip copie dans $Root).
+# Mise a jour : lancer la CI "Paquet de maintenance", puis reporter $BundleVersion et $BundleHash donnes dans
+# les notes de la release. Tant qu'ils ne sont pas modifies ici, une nouvelle release n'est jamais utilisee.
+# L'empreinte reste obligatoire : elle garantit que le paquet installe est bien celui qui a ete teste.
+# $BundleVersion vide = deploiement manuel (contenu du zip copie dans $Root).
 # Texte volontairement en ASCII : l'encodage du script cote NinjaOne n'est pas garanti.
 
-$Root       = 'C:\DFI-Maintenance'
-$ScriptName = 'Script_Maintenancev3.3.ps1'
-$BundleUrl  = ''
-$BundleHash = ''   # empreinte donnee dans les notes de la release
-$Field      = 'mreReport'
-$MaxChars   = 10000
+$Root          = 'C:\DFI-Maintenance'
+$ScriptName    = 'Invoke-Maintenance.ps1'
+$Repo          = 'DFi-INFRA/windows-maintenance'
+$BundleVersion = ''   # ex. v3.3.1
+$BundleHash    = ''   # empreinte donnee dans les notes de la release
+$Field         = 'mreReport'
+$MaxChars      = 10000
+
+$BundleUrl = if ($BundleVersion) { "https://github.com/$Repo/releases/download/$BundleVersion/mre-bundle.zip" } else { '' }
 
 function Set-Field([string]$Value) {
     if (Get-Command Ninja-Property-Set -ErrorAction SilentlyContinue) {
@@ -71,6 +75,9 @@ function Install-Bundle {
         if (Test-Path $tools) { Remove-Item -Path $tools -Recurse -Force -ErrorAction Stop }
         Copy-Item -Path (Join-Path $x 'tools') -Destination $tools -Recurse -Force -ErrorAction Stop
         Copy-Item -Path (Join-Path $x $ScriptName) -Destination (Join-Path $Root $ScriptName) -Force -ErrorAction Stop
+        # Anciens noms versionnes (Script_Maintenancev3.3.ps1...) : remplaces par $ScriptName
+        Get-ChildItem -Path $Root -Filter 'Script_Maintenance*.ps1' -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
         Set-Content -Path (Join-Path $tools 'bundle.sha256') -Value $BundleHash -Encoding ASCII
     } finally {
         Remove-Item -Path $work -Recurse -Force -ErrorAction SilentlyContinue
@@ -96,6 +103,7 @@ function Test-Installed {
     return ''
 }
 
+if ($BundleUrl -and -not $BundleHash) { Stop-WithError "BundleHash manquant pour $BundleVersion" }
 $problem = Test-Installed
 if ($problem -and $BundleUrl) {
     Write-Output "Installation du paquet $BundleUrl ($problem)."

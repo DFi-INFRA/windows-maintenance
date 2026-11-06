@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = ROOT / "tools.json"
-SCRIPT = ROOT / "Script_Maintenancev3.3.ps1"
+SCRIPT = ROOT / "Invoke-Maintenance.ps1"
 DIST = ROOT / "dist"
 FIXED_TIME = (2026, 1, 1, 0, 0, 0)
 USER_AGENT = "dfi-maintenance-build"
@@ -123,7 +123,8 @@ def package(version, repo=None):
 
     lines = [f"Paquet de maintenance {version}", "",
              "À reporter dans le script NinjaOne MRE - Collecte :", "",
-             "```", f"$BundleUrl  = '{bundle_url(version, repo)}'", f"$BundleHash = '{digest}'", "```", "",
+             "```", f"$BundleVersion = '{version}'", f"$BundleHash    = '{digest}'", "```", "",
+             f"Paquet : {bundle_url(version, repo)}", "",
              "| Outil | Version | Source |", "|---|---|---|"]
     lines += [f"| {n} | {e['version']} | {e['url']} |" for n, e in sources["scripts"].items()]
     lines += [f"| {e['name']} | {e['version']} | {e['url']} |" for e in sources["modules"]]

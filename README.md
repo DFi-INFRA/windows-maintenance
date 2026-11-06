@@ -10,7 +10,7 @@ Le dépôt ne contient aucune donnée client : tout est collecté à l'exécutio
 
 | Fichier | Rôle |
 |---|---|
-| `Script_Maintenancev3.3.ps1` | Script de maintenance (Windows PowerShell 5.1, droits administrateur) |
+| `Invoke-Maintenance.ps1` | Script de maintenance (Windows PowerShell 5.1, droits administrateur) ; sa version est dans le JSON (`scriptVersion`) et le manifeste du paquet |
 | `MRE-Collecte.ps1` | Lanceur NinjaOne : installe le paquet de la release si besoin, vérifie, exécute |
 | `tools.json` | Outils externes : source officielle, version et empreinte SHA-256 figées |
 | `build/build.py` | Mise à jour des outils et construction du paquet (utilisé par la CI) |
@@ -37,9 +37,9 @@ Les versions figées sont dans `tools.json` et dans les notes de chaque release.
    « Mettre à jour les outils » pour passer chaque outil à sa dernière version officielle (le `tools.json`
    modifié est commité par la CI).
 2. La CI vérifie la syntaxe PowerShell, télécharge les outils, contrôle leurs empreintes et publie la release
-   avec `mre-bundle.zip`. Les notes de release donnent `$BundleUrl` et `$BundleHash`.
+   avec `mre-bundle.zip`. Les notes de release donnent `$BundleVersion` et `$BundleHash`.
 3. Tester le paquet sur un serveur (exécution manuelle du contenu du zip), surtout après une mise à jour d'outils.
-4. Reporter `$BundleUrl` et `$BundleHash` dans le script NinjaOne : chaque serveur installe le nouveau paquet
+4. Reporter `$BundleVersion` et `$BundleHash` dans le script NinjaOne : chaque serveur installe le nouveau paquet
    à sa prochaine exécution.
 
 Publier une release ne déploie rien : tant que `$BundleHash` n'est pas modifié dans NinjaOne, les serveurs
@@ -55,7 +55,7 @@ et `objects.githubusercontent.com` (le proxy WinHTTP de la machine est utilisé 
 Manuellement : extraire `mre-bundle.zip` dans `C:\DFI-Maintenance`, puis
 
 ```powershell
-.\Script_Maintenancev3.3.ps1 -ToolsPath C:\DFI-Maintenance\tools
+.\Invoke-Maintenance.ps1 -ToolsPath C:\DFI-Maintenance\tools
 ```
 
 Rapports dans `C:\DFI-Maintenance` ; les 10 plus récents de chaque type sont conservés.
