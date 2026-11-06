@@ -16,12 +16,26 @@ param(
     # Taille maximale acceptee par le custom field (caracteres). Au-dela, le JSON est allege puis, si
     # necessaire, remplace par un marqueur d'erreur pour que le moteur ne lise pas des donnees tronquees.
     [Parameter(Mandatory=$false)]
-    [int]$NinjaMaxChars = 10000
+    [int]$NinjaMaxChars = 10000,
+
+    # Partage Nextcloud en depot seul ("File drop", ex. https://cloud.exemple.ch/s/AbCdEf) qui recoit le zip
+    # des rapports, et son mot de passe. Vide = le zip reste dans Export\.
+    [Parameter(Mandatory=$false)]
+    [string]$DropUrl = "",
+
+    [Parameter(Mandatory=$false)]
+    [string]$DropPassword = ""
 )
 
 Write-Host "# ============================="
-Write-Host "# V3.3 : 05.11.2026"
+Write-Host "# V3.4 : 06.11.2026"
 Write-Host "# ============================="
+
+# v3.4 : 06.11.2026
+# - Rapport complet a onglets (Export\<SERVEUR>_Maintenance_<AAAAMM>.html) regroupant les rapports des outils
+#   (Maintenance, AD Health, GPOZaurr, CleanupMonster, HealthChecker, boites aux lettres, dcdiag, echecs de connexion)
+#   et zip avec les fichiers d'origine ; empreinte du zip dans le JSON (reportArchive)
+# - Depot du zip dans un partage Nextcloud en depot seul (-DropUrl, -DropPassword)
 
 # v3.3 : 05.11.2026
 # - Correction moyenne d'espace disque a 0% sur les serveurs a un seul disque (score de sante faussement degrade)
@@ -328,7 +342,7 @@ function Import-ToolManifest {
 # Le JSON est la source du moteur auto-mre (page XWiki) ; le HTML reste le rapport local.
 $script:Mre = [ordered]@{
     schema        = 'dfi-mre/1'
-    scriptVersion = '3.3'
+    scriptVersion = '3.4'
     generatedAt   = (Get-Date).ToUniversalTime().ToString('o')
     host          = $env:COMPUTERNAME
     # USERDNSDOMAIN est vide sous le compte System (NinjaOne) : domaine lu sur la machine
@@ -4532,6 +4546,222 @@ $htmlContent | Out-File -FilePath $outputPath -Encoding utf8
 Write-HostSafe "Le rapport HTML a ete genere avec succes a l'emplacement : $outputPath"
 
 Write-HostSafe "# ============================="
+Write-HostSafe "# Block 14b : Rapport complet a onglets et archive"
+Write-HostSafe "# ============================="
+
+# Les outils (ADChecker, GPOZaurr, CleanupMonster, HealthChecker...) ecrivent chacun leur rapport dans leur dossier.
+# On les regroupe dans un seul HTML autonome (un onglet par rapport), puis dans un zip avec les fichiers d'origine :
+#   Export\<SERVEUR>_Maintenance_<AAAAMM>.html et .zip
+# Seuls les fichiers produits par cette execution sont repris (un ancien rapport ne doit pas passer pour actuel).
+function New-MaintenanceArchive {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$MainReport,
+        [Parameter(Mandatory)][datetime]$Since,
+        [string]$Server = $env:COMPUTERNAME,
+        [string]$Period = (Get-Date -Format 'yyyyMM')
+    )
+    # Ordre des onglets ; Kind = html (affiche tel quel) ou text (affiche en texte brut)
+    $sources = @(
+        @{ Title = 'Maintenance';              Dir = '';                   Filter = [System.IO.Path]::GetFileName($MainReport); Kind = 'html' },
+        @{ Title = 'AD Health';                Dir = 'ADChecker';          Filter = 'ADHealthReport.html';             Kind = 'html' },
+        @{ Title = 'GPOZaurr';                 Dir = '';                   Filter = 'GPOZaurr.html';                   Kind = 'html' },
+        @{ Title = 'CleanupMonster';           Dir = '';                   Filter = 'CleanUpMonster.html';             Kind = 'html' },
+        @{ Title = 'Exchange HealthChecker';   Dir = 'HealthChecker';      Filter = 'ExchangeAllServersReport.html';   Kind = 'html' },
+        @{ Title = 'Boites aux lettres';       Dir = 'ExchangeSizeReport'; Filter = 'MailboxSize_*.html';              Kind = 'html' },
+        @{ Title = 'HealthChecker (texte)';    Dir = 'HealthChecker';      Filter = 'HealthChecker-*.txt';             Kind = 'text' },
+        @{ Title = 'dcdiag';                   Dir = 'dcdiag';             Filter = 'dcdiag_*.txt';                    Kind = 'text' },
+        @{ Title = 'dcdiag DNS';               Dir = 'dcdiag';             Filter = 'dcdiagdns_*.txt';                 Kind = 'text' },
+        @{ Title = 'Echecs de connexion';      Dir = 'events';             Filter = 'logonfail_*.csv';                 Kind = 'text' }
+    )
+    $found = @()
+    foreach ($s in $sources) {
+        $dir = if ($s.Dir) { Join-Path $Root $s.Dir } else { $Root }
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        $file = Get-ChildItem -Path $dir -Filter $s.Filter -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -ge $Since } |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($file) {
+            $rel = if ($s.Dir) { "$($s.Dir)/$($file.Name)" } else { $file.Name }
+            $found += [pscustomobject]@{ Title = $s.Title; Kind = $s.Kind; Path = $file.FullName; Rel = $rel }
+        }
+    }
+    if ($found.Count -eq 0) { throw "aucun rapport produit par cette execution" }
+
+    $exportDir = Join-Path $Root 'Export'
+    if (-not (Test-Path -LiteralPath $exportDir)) { New-Item -ItemType Directory -Path $exportDir -Force | Out-Null }
+    $baseName = "${Server}_Maintenance_$Period"
+    $htmlPath = Join-Path $exportDir "$baseName.html"
+    $zipPath  = Join-Path $exportDir "$baseName.zip"
+    $enc = { param($t) [System.Net.WebUtility]::HtmlEncode([string]$t) }
+
+    # Chaque rapport est stocke encode dans un <textarea> et charge dans une iframe (srcdoc) au premier clic :
+    # les styles et scripts des outils restent isoles et la page s'ouvre vite meme avec de gros rapports.
+    $tabs = New-Object System.Text.StringBuilder
+    $panes = New-Object System.Text.StringBuilder
+    for ($i = 0; $i -lt $found.Count; $i++) {
+        $f = $found[$i]
+        $raw = [System.IO.File]::ReadAllText($f.Path)
+        $active = if ($i -eq 0) { ' active' } else { '' }
+        [void]$tabs.Append("<button class='tab$active' data-i='$i' title='$(& $enc $f.Rel)'>$(& $enc $f.Title)</button>")
+        if ($f.Kind -eq 'html') {
+            [void]$panes.Append("<div class='pane$active' id='p$i'><textarea hidden id='s$i'>$(& $enc $raw)</textarea><iframe id='f$i'></iframe></div>")
+        } else {
+            [void]$panes.Append("<div class='pane$active' id='p$i'><pre>$(& $enc $raw)</pre></div>")
+        }
+    }
+    $generated = Get-Date -Format 'dd.MM.yyyy HH:mm'
+    $page = @"
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>$(& $enc $Server) - Maintenance $Period</title>
+<style>
+html, body { margin: 0; height: 100%; font-family: Segoe UI, Arial, sans-serif; }
+body { display: flex; flex-direction: column; }
+header { background: #1f3a5f; color: #fff; padding: 8px 16px; }
+header h1 { margin: 0; font-size: 18px; }
+header span { font-size: 12px; opacity: .8; }
+nav { display: flex; flex-wrap: wrap; gap: 2px; background: #e8edf3; padding: 4px 8px 0; border-bottom: 1px solid #b8c4d2; }
+.tab { border: 1px solid #b8c4d2; border-bottom: none; background: #f6f8fa; padding: 6px 12px; cursor: pointer; font-size: 13px; border-radius: 4px 4px 0 0; }
+.tab.active { background: #fff; font-weight: 600; }
+main { flex: 1; position: relative; }
+.pane { display: none; position: absolute; inset: 0; overflow: auto; }
+.pane.active { display: block; }
+.pane iframe { border: 0; width: 100%; height: 100%; }
+.pane pre { margin: 0; padding: 12px 16px; font: 12px Consolas, monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header><h1>$(& $enc $Server) - Maintenance $Period</h1><span>Genere le $generated</span></header>
+<nav>$($tabs.ToString())</nav>
+<main>$($panes.ToString())</main>
+<script>
+(function () {
+  function show(i) {
+    document.querySelectorAll('.tab, .pane').forEach(function (e) { e.classList.remove('active'); });
+    document.querySelector('.tab[data-i="' + i + '"]').classList.add('active');
+    document.getElementById('p' + i).classList.add('active');
+    var f = document.getElementById('f' + i), s = document.getElementById('s' + i);
+    if (f && s && !f.dataset.loaded) { f.srcdoc = s.value; f.dataset.loaded = '1'; }
+  }
+  document.querySelectorAll('.tab').forEach(function (b) { b.addEventListener('click', function () { show(b.dataset.i); }); });
+  show(0);
+})();
+</script>
+</body>
+</html>
+"@
+    [System.IO.File]::WriteAllText($htmlPath, $page, (New-Object System.Text.UTF8Encoding $false))
+
+    # Zip : le rapport complet a la racine, les fichiers d'origine dans originaux\ (arborescence conservee)
+    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+    $zip = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $htmlPath, "$baseName.html")
+        foreach ($f in $found) {
+            [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $f.Path, "originaux/$($f.Rel)")
+        }
+    } finally { $zip.Dispose() }
+
+    $zipItem = Get-Item -LiteralPath $zipPath
+    return [ordered]@{
+        file      = $zipItem.Name
+        path      = $zipItem.FullName
+        sizeBytes = $zipItem.Length
+        sha256    = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
+        tabs      = @($found | ForEach-Object { $_.Title })
+    }
+}
+
+$script:MreArchive = $null
+try {
+    $runStart = [datetime]::Parse($script:Mre.generatedAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind).ToLocalTime().AddMinutes(-1)
+    $script:MreArchive = New-MaintenanceArchive -Root $Config.OutputPath -MainReport $outputPath -Since $runStart -Server $Hostname
+    Write-HostSafe "Rapport complet et archive : $($script:MreArchive.path) ($([math]::Round($script:MreArchive.sizeBytes / 1MB, 1)) Mo, onglets : $($script:MreArchive.tabs -join ', '))"
+} catch {
+    Write-Warning "Rapport complet / archive impossible : $($_.Exception.Message)"
+    Add-MreError -Section 'export' -Message "archive des rapports impossible : $($_.Exception.Message)"
+}
+
+# Depot du zip dans le partage Nextcloud (WebDAV public : identifiant = jeton du partage, mot de passe du partage).
+# Le partage est en depot seul : le serveur ne peut ni lire ni lister ce que les autres ont depose.
+# Le nom porte l'horodatage : un nouveau passage dans le mois n'ecrase rien, le moteur prend le plus recent
+# dont l'empreinte correspond au JSON.
+function Send-MaintenanceArchive {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ShareUrl,
+        [string]$Password = '',
+        [string]$ProxyServer = '',
+        [string]$ProxyBypass = ''
+    )
+    if ($ShareUrl -notmatch '^(https?://[^/]+(?:/.*?)?)/(?:index\.php/)?s/([A-Za-z0-9]+)/?$') {
+        throw "lien de partage Nextcloud non reconnu : $ShareUrl"
+    }
+    $base, $token = ($matches[1] -replace '/index\.php$', ''), $matches[2]
+    $item = Get-Item -LiteralPath $Path
+    $name = [System.IO.Path]::GetFileNameWithoutExtension($item.Name) + '_' + (Get-Date -Format 'yyyyMMdd-HHmmss') + $item.Extension
+    # Adresse WebDAV publique actuelle (Nextcloud 29+). Un partage "demande de fichiers" exige un pseudonyme
+    # (X-NC-Nickname) : on donne le nom du serveur.
+    $uri = [Uri]("$base/public.php/dav/files/$token/" + [Uri]::EscapeDataString($name))
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $req = [System.Net.HttpWebRequest]::Create($uri)
+    $req.Method = 'PUT'
+    $req.Timeout = 600000
+    $req.ReadWriteTimeout = 600000
+    $req.AllowWriteStreamBuffering = $false
+    $req.ContentLength = $item.Length
+    $req.ContentType = 'application/zip'
+    $req.Headers['Authorization'] = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${token}:$Password"))
+    $req.Headers['X-Requested-With'] = 'XMLHttpRequest'
+    $req.Headers['X-NC-Nickname'] = $env:COMPUTERNAME
+    # Proxy WinHTTP de la machine (System ne l'applique pas forcement), sauf si l'hote est dans la liste d'exclusion
+    $req.Proxy = $null
+    if ($ProxyServer) {
+        $hostName = $uri.Host
+        $bypassed = $false
+        foreach ($b in ($ProxyBypass -split '[;,\s]+' | Where-Object { $_ })) {
+            if ($b -eq '<local>') { if ($hostName -notmatch '\.') { $bypassed = $true } }
+            elseif ($hostName -like $b) { $bypassed = $true }
+        }
+        if (-not $bypassed) {
+            $proxy = $ProxyServer
+            if ($proxy -match '(?i)(?:^|;)https=([^;\s]+)') { $proxy = $matches[1] }
+            elseif ($proxy -match '(?i)(?:^|;)http=([^;\s]+)') { $proxy = $matches[1] }
+            if ($proxy -notmatch '^[a-z]+://') { $proxy = "http://$proxy" }
+            $req.Proxy = New-Object System.Net.WebProxy($proxy)
+            $req.Proxy.UseDefaultCredentials = $true
+        }
+    }
+    $in = [System.IO.File]::OpenRead($item.FullName)
+    try {
+        $out = $req.GetRequestStream()
+        try { $in.CopyTo($out) } finally { $out.Dispose() }
+    } finally { $in.Dispose() }
+    $resp = $req.GetResponse()
+    try { $code = [int]$resp.StatusCode } finally { $resp.Dispose() }
+    return [ordered]@{ status = 'ok'; name = $name; httpStatus = $code }
+}
+
+if ($script:MreArchive -and $DropUrl) {
+    try {
+        $script:MreArchive.upload = Send-MaintenanceArchive -Path $script:MreArchive.path -ShareUrl $DropUrl -Password $DropPassword `
+            -ProxyServer ([string]$mreWinHttpProxy.server) -ProxyBypass ([string]$mreWinHttpProxy.bypass)
+        Write-HostSafe "Archive deposee dans Nextcloud : $($script:MreArchive.upload.name)"
+    } catch {
+        $msg = $_.Exception.Message
+        if ($_.Exception.InnerException) { $msg = $_.Exception.InnerException.Message }
+        $script:MreArchive.upload = [ordered]@{ status = 'error'; error = $msg }
+        Write-Warning "Depot Nextcloud impossible : $msg"
+        Add-MreError -Section 'export' -Message "depot Nextcloud impossible : $msg"
+    }
+}
+
+Write-HostSafe "# ============================="
 Write-HostSafe "# Block 15 : Export JSON (v3.3)"
 Write-HostSafe "# ============================="
 
@@ -4552,6 +4782,7 @@ try {
     }
     $script:Mre.toolIntegrityErrors = @($script:ToolIntegrityErrors)
     $script:Mre.reportHtml = $outputPath
+    $script:Mre.reportArchive = $script:MreArchive
     $script:Mre.completedAt = (Get-Date).ToUniversalTime().ToString('o')
 
     $jsonFull = $script:Mre | ConvertTo-Json -Depth 12
@@ -4581,6 +4812,8 @@ function Clear-OldArtifacts {
         @{ Dir = 'HealthChecker';      Filter = 'HealthChecker-*.xml' },
         @{ Dir = 'HealthChecker';      Filter = 'ExchangeAllServersReport_*.html' },
         @{ Dir = 'ExchangeSizeReport'; Filter = 'MailboxSize_*.html' },
+        @{ Dir = 'Export';             Filter = '*_Maintenance_*.html' },
+        @{ Dir = 'Export';             Filter = '*_Maintenance_*.zip' },
         @{ Dir = 'logs';               Filter = '*'; Keep = $keepLogs }
     )
     $removed = 0

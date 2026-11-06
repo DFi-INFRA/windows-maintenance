@@ -17,6 +17,8 @@ $Repo          = 'DFi-INFRA/windows-maintenance'
 $BundleVersion = ''   # ex. v3.3.1
 $BundleHash    = ''   # empreinte donnee dans les notes de la release
 $Field         = 'mreReport'
+$DropUrl       = ''   # partage Nextcloud en depot seul qui recoit le zip des rapports (vide = pas d'envoi)
+$DropPassword  = ''   # mot de passe de ce partage
 $MaxChars      = 10000
 
 $BundleUrl = if ($BundleVersion) { "https://github.com/$Repo/releases/download/$BundleVersion/mre-bundle.zip" } else { '' }
@@ -117,7 +119,7 @@ Write-Output "Paquet $($manifest.bundleVersion) verifie, lancement."
 $started = Get-Date
 try {
     # Meme processus : Ninja-Property-Set reste disponible pour le script de maintenance
-    & $scriptPath -ToolsPath $toolsPath -NinjaField $Field -NinjaMaxChars $MaxChars
+    & $scriptPath -ToolsPath $toolsPath -NinjaField $Field -NinjaMaxChars $MaxChars -DropUrl $DropUrl -DropPassword $DropPassword
 } catch {
     Stop-WithError ("exception : " + $_.Exception.Message)
 }

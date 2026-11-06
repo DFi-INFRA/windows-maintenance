@@ -59,4 +59,8 @@ Manuellement : extraire `mre-bundle.zip` dans `C:\DFI-Maintenance`, puis
 ```
 
 Rapports dans `C:\DFI-Maintenance` ; les 10 plus récents de chaque type sont conservés.
+Le dossier `Export` contient le rapport complet du mois (`<SERVEUR>_Maintenance_<AAAAMM>.html`, un onglet par
+outil) et un zip avec les fichiers d'origine.
+`-DropUrl <lien de partage> -DropPassword <mot de passe>` dépose ce zip dans un partage Nextcloud en dépôt seul
+(« File drop ») ; renseigner `$DropUrl` et `$DropPassword` dans le script NinjaOne.
 `-NinjaField <champ>` écrit le JSON compressé (gzip + base64) dans un custom field NinjaOne.
