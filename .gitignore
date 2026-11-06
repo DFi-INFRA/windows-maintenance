@@ -1,0 +1,4 @@
+dist/
+tools/
+*.download
+__pycache__/

@@ -1,0 +1,66 @@
+name: Paquet de maintenance
+
+# Lancement manuel uniquement : produit une release contenant mre-bundle.zip (script + outils figés).
+# Une release ne déploie rien : les serveurs ne l'utilisent qu'une fois son empreinte reportée dans NinjaOne.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version de la release (ex. v3.3.2)"
+        required: true
+      update_tools:
+        description: "Mettre à jour les outils vers leur dernière version officielle"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Vérifier la syntaxe PowerShell
+        shell: pwsh
+        run: |
+          foreach ($f in Get-ChildItem -Recurse -Filter *.ps1) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
+            if ($errors) { $errors | ForEach-Object { Write-Error "$($f.Name) : $($_.Message)" }; exit 1 }
+          }
+
+      - name: Mettre à jour les outils
+        if: ${{ inputs.update_tools }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python build/build.py update
+
+      - name: Construire le paquet
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python build/build.py package --version "${{ inputs.version }}"
+
+      - name: Enregistrer tools.json mis à jour
+        if: ${{ inputs.update_tools }}
+        run: |
+          if ! git diff --quiet tools.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "Outils mis à jour pour ${{ inputs.version }}"
+            git push
+          fi
+
+      - name: Publier la release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.version }}" dist/mre-bundle.zip \
+            --target "$(git rev-parse HEAD)" \
+            --title "${{ inputs.version }}" \
+            --notes-file dist/release-notes.md

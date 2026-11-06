@@ -1,0 +1,66 @@
+{
+  "scripts": {
+    "ADHealth": {
+      "source": {
+        "type": "url",
+        "url": "https://www.alitajran.com/wp-content/uploads/scripts/Get-ADHealth.ps1",
+        "versionPattern": "^\\s*V(\\d+(?:\\.\\d+)+)\\s"
+      },
+      "file": "Get-ADHealth.ps1",
+      "version": "3.16",
+      "url": "https://www.alitajran.com/wp-content/uploads/scripts/Get-ADHealth.ps1",
+      "sha256": "c2b70304041c3dcd0d0d8d7de70ce53397f2e9f2da2be4830966903c8c5cb2cc"
+    },
+    "HealthChecker": {
+      "source": {
+        "type": "github-release",
+        "repo": "microsoft/CSS-Exchange",
+        "asset": "^HealthChecker\\.ps1$"
+      },
+      "file": "HealthChecker.ps1",
+      "version": "v26.11.03.2200",
+      "url": "https://github.com/microsoft/CSS-Exchange/releases/download/v26.11.03.2200/HealthChecker.ps1",
+      "sha256": "512532445dc02b2b0a37d5ab6b7520f9cf5697df11797de3677c47136ebaaa18"
+    }
+  },
+  "modules": [
+    {
+      "name": "PSEventViewer",
+      "moduleRoot": false,
+      "source": {
+        "type": "psgallery",
+        "package": "PSEventViewer"
+      },
+      "file": "PSEventViewer.2.4.3.zip",
+      "version": "2.4.3",
+      "url": "https://www.powershellgallery.com/api/v2/package/PSEventViewer/2.4.3",
+      "sha256": "ac58f52cfdfeb4153a75209d327523ad0a60a14051cc6643d38cdf6915e57558"
+    },
+    {
+      "name": "GPOZaurr",
+      "moduleRoot": true,
+      "source": {
+        "type": "github-release",
+        "repo": "EvotecIT/GPOZaurr",
+        "asset": "^GPOZaurr\\.v[\\d.]+\\.zip$"
+      },
+      "file": "GPOZaurr.v1.1.10.zip",
+      "version": "v1.1.10",
+      "url": "https://github.com/EvotecIT/GPOZaurr/releases/download/v1.1.10/GPOZaurr.v1.1.10.zip",
+      "sha256": "1675ebb9e3aa5b2466220d62d294b6b1fb54319b4e0b6abc214d43dfd01ca4e4"
+    },
+    {
+      "name": "CleanUpMonster",
+      "moduleRoot": true,
+      "source": {
+        "type": "github-release",
+        "repo": "EvotecIT/CleanupMonster",
+        "asset": "^CleanupMonster\\.v[\\d.]+\\.zip$"
+      },
+      "file": "CleanupMonster.v3.1.7.zip",
+      "version": "v3.1.7",
+      "url": "https://github.com/EvotecIT/CleanupMonster/releases/download/v3.1.7/CleanupMonster.v3.1.7.zip",
+      "sha256": "c20aaee978c3fdcb2b05478d09a3f308db101f671892e7eeb30d0221e055c58e"
+    }
+  ]
+}
