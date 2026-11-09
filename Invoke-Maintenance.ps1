@@ -28,8 +28,12 @@ param(
 )
 
 Write-Host "# ============================="
-Write-Host "# V3.4 : 06.11.2026"
+Write-Host "# V3.4.1 : 09.11.2026"
 Write-Host "# ============================="
+
+# v3.4.1 : 09.11.2026
+# - GPOZaurr et CleanupMonster uniquement sur l'emulateur PDC (rapports de domaine identiques sur chaque DC)
+# - Plus d'erreur HKCU\...\Uninstall affichee sous le compte System
 
 # v3.4 : 06.11.2026
 # - Rapport complet a onglets (Export\<SERVEUR>_Maintenance_<AAAAMM>.html) regroupant les rapports des outils
@@ -342,7 +346,7 @@ function Import-ToolManifest {
 # Le JSON est la source du moteur auto-mre (page XWiki) ; le HTML reste le rapport local.
 $script:Mre = [ordered]@{
     schema        = 'dfi-mre/1'
-    scriptVersion = '3.4'
+    scriptVersion = '3.4.1'
     generatedAt   = (Get-Date).ToUniversalTime().ToString('o')
     host          = $env:COMPUTERNAME
     # USERDNSDOMAIN est vide sous le compte System (NinjaOne) : domaine lu sur la machine
@@ -449,6 +453,8 @@ function Get-Configuration {
             # ADChecker (Get-ADHealth) : controles complementaires (tombstone, corbeille AD, LDAP, NTLMv1...).
             # Passe par WinRM/CIM meme en local ; borne a 5 min. Mettre a $false si WinRM est indisponible.
             CheckADHealthTool   = $true
+            # GPOZaurr et CleanupMonster couvrent tout le domaine : uniquement sur l'emulateur PDC
+            DomainWideToolsOnPdcOnly = $true
         }
         Export = @{
             GeneratePDF       = $false
@@ -1579,7 +1585,8 @@ if ($filteredVersions.Count -gt 0) {
 
 
 #Soft installes sur le serveur
-$Appslist = Get-ChildItem "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall","HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall","HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall" | Get-ItemProperty | Select-Object DisplayName, DisplayVersion
+# HKCU n'a pas de cle Uninstall sous le compte System (NinjaOne) : erreur affichee sans incidence, on la tait (v3.4.1)
+$Appslist = Get-ChildItem "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall","HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall","HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | Get-ItemProperty -ErrorAction SilentlyContinue | Select-Object DisplayName, DisplayVersion
 
 $filteredApps = @()  # Tableau vide
 $veeamExcludedModulesPattern = '(?i)(proxmox|ovirt|google\s*cloud|gcp|kasten|aws|amazon\s+web\s+services)'
@@ -2514,37 +2521,47 @@ Set-MreSection -Name 'activeDirectory' -Value $mreAd
     $gpozaurrPath = Join-Path $Config.OutputPath "GPOZaurr.html"
     $CleanUpMonster = Join-Path $Config.OutputPath "CleanUpMonster.html"
 
-    # Lancer GPOZaurr si possible
-    Write-Host "# Lancement de GPOZaurr"
-    Write-Host "# Note: GPOZaurr est optionnel. Si indisponible, le rapport continue sans cette donnee."
-    ExecuteIfModuleAvailable -moduleName "GPOZaurr" -action {
-        try {
-            Invoke-GPOZaurr -FilePath $gpozaurrPath -HideHTML -ErrorAction Stop
-        } catch {
-            Write-Log -Message "Erreur lors de l'execution de GPOZaurr : $($_.Exception.Message)" -Level 'WARN'
-        }
+    # GPOZaurr et CleanupMonster analysent tout le domaine : chaque DC produirait le meme rapport (environ 9 Mo).
+    # Ils ne tournent que sur l'emulateur PDC ; si le PDC n'a pas pu etre determine, ils tournent quand meme (v3.4.1).
+    $runDomainWide = $true
+    if ($Config.Services.DomainWideToolsOnPdcOnly -and $mreTime.isPdcEmulator -eq $false) {
+        $runDomainWide = $false
+        Write-HostSafe "# GPOZaurr et CleanupMonster ignores : ce DC n'est pas l'emulateur PDC (rapports produits sur le PDC)."
+        $mreAd.domainWideTools = 'pdc'
     }
+    if ($runDomainWide) {
+        # Lancer GPOZaurr si possible
+        Write-Host "# Lancement de GPOZaurr"
+        Write-Host "# Note: GPOZaurr est optionnel. Si indisponible, le rapport continue sans cette donnee."
+        ExecuteIfModuleAvailable -moduleName "GPOZaurr" -action {
+            try {
+                Invoke-GPOZaurr -FilePath $gpozaurrPath -HideHTML -ErrorAction Stop
+            } catch {
+                Write-Log -Message "Erreur lors de l'execution de GPOZaurr : $($_.Exception.Message)" -Level 'WARN'
+            }
+        }
 
-    # Lancer CleanUpMonster si possible
-    Write-Host "# Lancement de CleanUpMonster"
-    ExecuteIfModuleAvailable -moduleName "CleanUpMonster" -action {
-        try {
-            # -ReportOnly : aucune desactivation ni suppression (verifie dans CleanupMonster 3.1.7) ; -WhatIf en double securite
-            $cumResult = Invoke-ADComputersCleanup -WhatIf -ReportOnly -Disable -Delete -ReportPath $CleanUpMonster -ErrorAction Stop
-            $prop = { param($o, $n) $p = $o.PSObject.Properties[$n]; if ($p) { $p.Value } else { $null } }
-            $stale = @($cumResult.CurrentRun | Where-Object { $_ } | ForEach-Object {
-                [ordered]@{
-                    name           = (& $prop $_ 'SamAccountName')
-                    dnsHostName    = (& $prop $_ 'DNSHostName')
-                    enabled        = (& $prop $_ 'Enabled')
-                    action         = [string](& $prop $_ 'Action')
-                    lastLogonDays  = (& $prop $_ 'LastLogonDays')
-                    passwordDays   = (& $prop $_ 'PasswordLastChangedDays')
-                    os             = (& $prop $_ 'OperatingSystem')
-                } })
-            $script:MreStaleComputers = [ordered]@{ thresholdDays = 180; count = $stale.Count; computers = @($stale | Select-Object -First 40) }
-        } catch {
-            Write-Host "Erreur lors de l'execution de CleanUpMonster : $($_.Exception.Message)"
+        # Lancer CleanUpMonster si possible
+        Write-Host "# Lancement de CleanUpMonster"
+        ExecuteIfModuleAvailable -moduleName "CleanUpMonster" -action {
+            try {
+                # -ReportOnly : aucune desactivation ni suppression (verifie dans CleanupMonster 3.1.7) ; -WhatIf en double securite
+                $cumResult = Invoke-ADComputersCleanup -WhatIf -ReportOnly -Disable -Delete -ReportPath $CleanUpMonster -ErrorAction Stop
+                $prop = { param($o, $n) $p = $o.PSObject.Properties[$n]; if ($p) { $p.Value } else { $null } }
+                $stale = @($cumResult.CurrentRun | Where-Object { $_ } | ForEach-Object {
+                    [ordered]@{
+                        name           = (& $prop $_ 'SamAccountName')
+                        dnsHostName    = (& $prop $_ 'DNSHostName')
+                        enabled        = (& $prop $_ 'Enabled')
+                        action         = [string](& $prop $_ 'Action')
+                        lastLogonDays  = (& $prop $_ 'LastLogonDays')
+                        passwordDays   = (& $prop $_ 'PasswordLastChangedDays')
+                        os             = (& $prop $_ 'OperatingSystem')
+                    } })
+                $script:MreStaleComputers = [ordered]@{ thresholdDays = 180; count = $stale.Count; computers = @($stale | Select-Object -First 40) }
+            } catch {
+                Write-Host "Erreur lors de l'execution de CleanUpMonster : $($_.Exception.Message)"
+            }
         }
     }
 
