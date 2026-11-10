@@ -28,8 +28,13 @@ param(
 )
 
 Write-Host "# ============================="
-Write-Host "# V3.4.2 : 10.11.2026"
+Write-Host "# V3.4.3 : 10.11.2026"
 Write-Host "# ============================="
+
+# v3.4.3 : 10.11.2026
+# - DC detecte par son role reel dans le domaine (DomainRole 4/5) et non par la seule presence du role AD DS :
+#   un ancien DC retrograde n'execute plus dcdiag, ADChecker, GPOZaurr ni CleanupMonster, et le JSON le signale
+#   (activeDirectory.notPromoted) avec une recommandation
 
 # v3.4.2 : 10.11.2026
 # - dcdiag en francais (Windows Server 2016) : formats "DC01 a reussi le test X" et "Le test X" / " de DC01 a reussi"
@@ -350,7 +355,7 @@ function Import-ToolManifest {
 # Le JSON est la source du moteur auto-mre (page XWiki) ; le HTML reste le rapport local.
 $script:Mre = [ordered]@{
     schema        = 'dfi-mre/1'
-    scriptVersion = '3.4.2'
+    scriptVersion = '3.4.3'
     generatedAt   = (Get-Date).ToUniversalTime().ToString('o')
     host          = $env:COMPUTERNAME
     # USERDNSDOMAIN est vide sous le compte System (NinjaOne) : domaine lu sur la machine
@@ -899,10 +904,17 @@ $EnvCapabilities = [ordered]@{
     HasExchange    = $false
 }
 
+# Role AD DS installe ne veut pas dire controleur de domaine : un ancien DC retrograde (ou jamais promu) garde
+# le role, mais NTDS est arrete et dcdiag echoue (LDAP 81). On se fie au role reel dans le domaine (v3.4.3).
+$script:AdNotPromoted = $false
 try {
     if ($Config.Services.CheckAD) {
         $feature = Get-WindowsFeature -Name AD-Domain-Services -ErrorAction SilentlyContinue
-        if ($feature -and $feature.Installed) { $EnvCapabilities.HasAD = $true }
+        if ($feature -and $feature.Installed) {
+            $domainRoleNow = try { [int](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).DomainRole } catch { -1 }
+            if ($domainRoleNow -in @(4, 5) -or $domainRoleNow -eq -1) { $EnvCapabilities.HasAD = $true }
+            else { $script:AdNotPromoted = $true }
+        }
     }
 } catch {}
 
@@ -2031,7 +2043,13 @@ Write-HostSafe "# Block 7 : Verifications AD"
 Write-HostSafe "# ============================="
 
 if (-not $EnvCapabilities.HasAD) {
-    Write-HostSafe "# Bloc AD ignore : role Active Directory non detecte sur ce serveur."
+    if ($script:AdNotPromoted) {
+        Write-HostSafe "# Bloc AD ignore : role AD DS installe mais ce serveur n'est pas controleur de domaine."
+        Set-MreSection -Name 'activeDirectory' -Value ([ordered]@{ present = $false; featureInstalled = $true; notPromoted = $true })
+        Add-ActionRecommendation -Category "AD" -Message "Active Directory : le role AD DS est installe mais le serveur n'est pas controleur du domaine (ancien DC retrograde ?) - retirer le role ou promouvoir le serveur." -Priority 2
+    } else {
+        Write-HostSafe "# Bloc AD ignore : role Active Directory non detecte sur ce serveur."
+    }
 } else {
 
 # Modules externes figes (v3.3) : extraits depuis les archives verifiees de tools\modules,
@@ -2266,7 +2284,7 @@ function Get-WinADLastBackup {
 
     # Condition pour verifier si le role AD est present
 $adRolePresent = $false
-if ($Config.Services.CheckAD) {
+if ($Config.Services.CheckAD -and -not $script:AdNotPromoted) {
     $adRolePresent = Get-WindowsFeature -Name AD-Domain-Services | Select-Object -ExpandProperty Installed
 }
 
@@ -3496,7 +3514,7 @@ $menuHtml += @"
 $rolesSummary = @()
 $rolesSummary += [PSCustomObject]@{
     Name   = "Active Directory"
-    Status = if ($Config.Services.CheckAD -and $adRolePresent) { "Présent" } else { "Non installé" }
+    Status = if ($Config.Services.CheckAD -and $adRolePresent) { "Présent" } elseif ($script:AdNotPromoted) { "Rôle installé, non promu" } else { "Non installé" }
 }
 $rolesSummary += [PSCustomObject]@{
     Name   = "Serveur d'impression"
