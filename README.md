@@ -12,6 +12,7 @@ Le dépôt ne contient aucune donnée client : tout est collecté à l'exécutio
 |---|---|
 | `Invoke-Maintenance.ps1` | Script de maintenance (Windows PowerShell 5.1, droits administrateur) ; sa version est dans le JSON (`scriptVersion`) et le manifeste du paquet |
 | `MRE-Collecte.ps1` | Lanceur NinjaOne : installe le paquet de la release si besoin, vérifie, exécute |
+| `Install-DigiCertGlobalRootG2.ps1` | Script NinjaOne ponctuel : ajoute la racine DigiCert Global Root G2 (certificat de Nextcloud) aux serveurs qui ne l'ont pas |
 | `tools.json` | Outils externes : source officielle, version et empreinte SHA-256 figées |
 | `build/build.py` | Mise à jour des outils et construction du paquet (utilisé par la CI) |
 | `.github/workflows/package.yml` | CI manuelle : produit une release contenant `mre-bundle.zip` |

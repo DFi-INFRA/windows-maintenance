@@ -28,8 +28,12 @@ param(
 )
 
 Write-Host "# ============================="
-Write-Host "# V3.4.1 : 09.11.2026"
+Write-Host "# V3.4.2 : 10.11.2026"
 Write-Host "# ============================="
+
+# v3.4.2 : 10.11.2026
+# - dcdiag en francais (Windows Server 2016) : formats "DC01 a reussi le test X" et "Le test X" / " de DC01 a reussi"
+#   sur plusieurs lignes, accents detruits par l'encodage toleres (0 resultat analysable auparavant)
 
 # v3.4.1 : 09.11.2026
 # - GPOZaurr et CleanupMonster uniquement sur l'emulateur PDC (rapports de domaine identiques sur chaque DC)
@@ -346,7 +350,7 @@ function Import-ToolManifest {
 # Le JSON est la source du moteur auto-mre (page XWiki) ; le HTML reste le rapport local.
 $script:Mre = [ordered]@{
     schema        = 'dfi-mre/1'
-    scriptVersion = '3.4.1'
+    scriptVersion = '3.4.2'
     generatedAt   = (Get-Date).ToUniversalTime().ToString('o')
     host          = $env:COMPUTERNAME
     # USERDNSDOMAIN est vide sous le compte System (NinjaOne) : domaine lu sur la machine
@@ -2101,6 +2105,8 @@ function Convert-DcDiagResults {
     # Formats geres :
     #   EN : "......................... DC01 passed test Connectivity"
     #   FR : "......................... Le test Connectivity de DC01 a réussi"  (accents tolerants : encodage console variable)
+    #   FR : "......................... DC01 a réussi le test Connectivity" / "DC01 a échoué au test NetLogons"
+    #   FR coupé (2016) : "......................... Le test Connectivity" puis, 1 à 3 lignes plus bas, " de DC01 a réussi"
     param (
         [object]$DcDiagOutput
     )
@@ -2131,6 +2137,29 @@ function Convert-DcDiagResults {
                 if ($lines[$j].Trim()) { $name = ($lines[$j].Trim() -split '\s+')[0]; break }
             }
             $results += [PSCustomObject]@{ TestName = $(if ($name) { $name } else { '(nom illisible)' }); Entity = $entity; TestResult = $verdict; Reason = $(if ($verdict -eq 'failed') { & $reasonOf $i } else { $null }) }
+        } elseif ($line -match '^\s*\.{3,}\s*(\S+)\s+a\s+(r\S{1,4}ussi\s+le|\S{1,4}chou\S{1,4}\s+au)\s+test\b\s*(\S*)') {
+            # FR (Windows Server 2016 notamment) : "DC01 a réussi le test Connectivity", "DC01 a échoué au test NetLogons" ;
+            # accents tolérés (console OEM), nom de test éventuellement renvoyé à la ligne
+            # groupes lus avant tout autre -match (qui écraserait $matches)
+            $entity = $matches[1]; $rawVerdict = $matches[2]; $name = $matches[3]
+            $verdict = if ($rawVerdict -match '^r') { 'passed' } else { 'failed' }
+            if (-not $name) {
+                for ($j = $i + 1; $j -lt [math]::Min($i + 4, $lines.Count); $j++) {
+                    if ($lines[$j].Trim()) { $name = ($lines[$j].Trim() -split '\s+')[0]; break }
+                }
+            }
+            $results += [PSCustomObject]@{ TestName = $(if ($name) { $name } else { '(nom illisible)' }); Entity = $entity; TestResult = $verdict; Reason = $(if ($verdict -eq 'failed') { & $reasonOf $i } else { $null }) }
+        } elseif ($line -match '^\s*\.{3,}\s*Le test\s+(\S+)\s*$') {
+            # FR coupé sur plusieurs lignes (Windows Server 2016) : "Le test Connectivity" / (vide) / " de SRVFILE a r?ussi"
+            $testName = $matches[1]; $found = $false
+            for ($j = $i + 1; $j -lt [math]::Min($i + 4, $lines.Count); $j++) {
+                if ($lines[$j] -match '^\s*de\s+(\S+)\s+a\s+(\S+)') {
+                    $entity = $matches[1]; $raw = $matches[2]
+                    $verdict = if ($raw -match '^r.{0,3}ussi') { 'passed' } elseif ($raw -match 'chou') { 'failed' } else { $raw }
+                    $results += [PSCustomObject]@{ TestName = $testName; Entity = $entity; TestResult = $verdict; Reason = $(if ($verdict -eq 'failed') { & $reasonOf $i } else { $null }) }
+                    $found = $true; break
+                }
+            }
         } elseif ($line -match '^\s*\.{3,}\s*Le test\s+(\S+)\s+de\s+(\S+)\s+a\s+(\S+)') {
             $testName = $matches[1]; $entity = $matches[2]; $raw = $matches[3]
             $verdict = if ($raw -match '^r.ussi') { 'passed' } elseif ($raw -match '^.chou') { 'failed' } else { $raw }
